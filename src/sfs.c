@@ -178,17 +178,17 @@ int check_parent_dir(const char* path, int i)
 
 char* get_file_name(int i)
 {
+	int offset;
   char *temp =iTable.table[i].path;
-  int offset;
-  for(offset = (strlen(iTable.table[i].path))-1; offset>=0 ; offset--)
+  for(offset = (strlen(temp)-1); offset>=0 ; offset--)
   {
     if(*(temp+offset) == '/')
     {
       break;
     }
   }
-  char *rtn = malloc((strlen(iTable.table[i].path))-offset);
-  memcpy(rtn, temp+offset+1, (strlen(iTable.table[i].path))-offset);
+  char *rtn = malloc((strlen(temp))-offset);
+  memcpy(rtn, temp+offset+1, (strlen(temp))-offset);
   *(rtn+strlen(rtn)+1)='\0';
   return rtn;
 }
@@ -209,32 +209,30 @@ char* get_file_name(int i)
  */
 void *sfs_init(struct fuse_conn_info *conn)
 {
+	char *buf = (char*) malloc(BLOCK_SIZE);
+	
     fprintf(stderr, "in bb-init\n");
 	log_msg("\nsfs_init()\n");
    
     struct stat *statbuf = (struct stat*) malloc(sizeof(struct stat));
-    int in = lstat((SFS_DATA)->diskfile,statbuf);
-    
     log_stat(statbuf);
     
-    if(in != 0) 
+	int in;
+    if((in = lstat((SFS_DATA)->diskfile,statbuf)) != 0) 
 	{
-        perror("No STAT on diskfile");
+        perror("stat file not found");
         exit(EXIT_FAILURE);
     }
 
     disk_open((SFS_DATA)->diskfile);
-
-    in = 0;
-    for(; in<TOTAL_INODE_NUMBER;in++)
+	
+    for(in = 0; in<TOTAL_INODE_NUMBER;in++)
     {
       fTable.table[in].id = in;
       fTable.table[in].inode_id = -1;
     }
     
-    char *buf = (char*) malloc(BLOCK_SIZE);
     if(block_read(0, buf) <= 0) {
-      // initialize DataInfo etc here in file
       sb.data_blocks = TOTAL_DATA_BLOCKS;
       sb.iNodeTable = 1; 
 	  
@@ -258,7 +256,6 @@ void *sfs_init(struct fuse_conn_info *conn)
   bbmap.size = TOTAL_DATA_BLOCKS;
   ibmap.size = TOTAL_INODE_NUMBER;
  
-      //init the root i-node here
       inode *root = &iTable.table[0];
       memcpy(&root->path,"/",1);
       root->st_mode = S_IFDIR;
@@ -267,10 +264,10 @@ void *sfs_init(struct fuse_conn_info *conn)
       root->gid = getgid();
       root->size = 0;
       root->links = 2;
-      root->created = time(NULL);
-      root->type = 0;  // directory
-
-      InitNextBit(0,1,1); // set the bit map for root
+      root->type = 0; 
+	  root->created = time(NULL);	  
+	  
+      InitNextBit(0,1,1); 
       block_write(0, &sb) > 0;
       block_write(1, &ibmap) > 0;
       block_write(2, &bbmap) > 0;
@@ -286,16 +283,14 @@ void *sfs_init(struct fuse_conn_info *conn)
           block_left -= sizeof(struct inode_);
           j++;
         }
-        //write the block
 		block_write(i+3, buffer);
       }
       free(buffer);
     }else{
       struct DataInfo *sb = (struct DataInfo*) buf;
-      
       uint8_t *buffer = malloc(BLOCK_SIZE*sizeof(uint8_t));
 
-      if(block_read(1, buffer) > 0)
+      if(block_read(1, buffer)>0)
 	  {
         memcpy(&ibmap,buffer, sizeof(struct BitmapInfo));
         memset(buffer,0,BLOCK_SIZE);
@@ -362,7 +357,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     path, statbuf);
    
     //search for inode
-    int inode ;//= get_inode_from_path(path);
+    int inode ;
     memset(statbuf,0,sizeof(struct stat));
     if((inode = get_inode_from_path(path))!=-1)
     {
@@ -487,25 +482,18 @@ int sfs_unlink(const char *path)
  */
 int sfs_open(const char *path, struct fuse_file_info *fi)
 {
-    int found = 0;
     log_msg("\n\nsfs_open(path\"%s\", fi=0x%08x)\n",
       path, fi);
 	  
-    int i = get_inode_from_path(path);
-    if(i != -1)
+    if(get_inode_from_path(path) != -1)
     {
-      found = find_fTable(-1);
-      if(found != -1)
-	  {
-		  take_fTable(found,i);
-	  }
+      take_fTable(find_fTable(-1), get_inode_from_path(path));
+	  return find_fTable(-1);
     }
 	else
 	{
-      found = -1;
+      return -1;
     }
-    
-    return found;
 }
 
 /** Release an open file
@@ -526,19 +514,14 @@ int sfs_release(const char *path, struct fuse_file_info *fi)
 {
     log_msg("\nsfs_release(path=\"%s\", fi=0x%08x)\n",
     path, fi);
-	int i;
-    if((i = get_inode_from_path(path)) != -1)
+	
+    int file_d;
+    if((file_d = find_fTable(get_inode_from_path(path))) != -1)
     {
-      int file_d = find_fTable(i);
-      if(file_d != -1)
-	  {
-        fTable_t *f = &fTable.table[file_d];
-        int temp = f->inode_id;
-        f->inode_id = -1;
-      }
+      fTable_t *f = &fTable.table[file_d];
+      int temp = f->inode_id;
+      f->inode_id = -1;
     }
-    
-
     return 0;
 }
 
@@ -781,9 +764,9 @@ int sfs_mkdir(const char *path, mode_t mode)
     log_msg("\nsfs_mkdir(path=\"%s\", mode=0%3o)\n",
       path, mode);
 	  
-    int i = get_inode_from_path(path);
-    if(i == -1)
-	{  
+    if(get_inode_from_path(path) != -1)
+		return -EEXIST;
+	else {  
       struct inode_ *tmp = malloc(sizeof(struct inode_));
       tmp->id = FindNextBit(1);
       tmp->size = 0;
@@ -800,13 +783,8 @@ int sfs_mkdir(const char *path, mode_t mode)
       write_inode_to_disk(tmp->id);
       free(tmp);
       block_write(1, &ibmap);
-
-    }else{
-      return -EEXIST;
+	  return 0;
     }
-
-    
-    return 0;
 }
 
 
@@ -817,35 +795,31 @@ int sfs_rmdir(const char *path)
     log_msg("sfs_rmdir(path=\"%s\")\n",
       path);
 
-    int i = get_inode_from_path(path);
-    if(i!=-1){
-      int j;
-      for(j=0;j<TOTAL_INODE_NUMBER;j++)
+    int i;
+    if((i = get_inode_from_path(path))!=-1)
+		return -ENOENT;
+		
+    int j;
+    for(j=0;j<TOTAL_INODE_NUMBER;j++)
+    {
+      if(((ibmap.bitmap[j / 8] >> (j % 8)) & 1) != 0 && j != i && check_parent_dir(path, j)!=-1)
       {
-        if(((ibmap.bitmap[j / 8] >> (j % 8)) & 1) != 0 && j != i)
-        {
-          if(check_parent_dir(path, j)!=-1)
-          {
-            log_msg("DIR not empty!\n");
-            return -ENOTEMPTY;
-          }
-        }
+          log_msg("DIR not empty!\n");
+          return -ENOTEMPTY;
       }
-      struct inode_ *ptr = &iTable.table[i];
-      InitNextBit(ptr->id, 0,1);
-      memset(ptr->path, 0, 64);
-      for(j = 0; j<15;j++)
-      {
-        InitNextBit(ptr->data_blocks[j],0,0);
-        ptr->data_blocks[j] = -1;
-      }
-      log_msg("Inode %d delete complete!\n\n",ptr->id);
-      write_inode_to_disk(ptr->id);
-      block_write(1, &ibmap);
-      block_write(2, &bbmap);
-    }else{
-      return -ENOENT;
     }
+	
+    struct inode_ *ptr = &iTable.table[i];
+    InitNextBit(ptr->id, 0,1);
+    memset(ptr->path, 0, 64);
+    for(j = 0; j<15;j++)
+    {
+      InitNextBit(ptr->data_blocks[j],0,0);
+      ptr->data_blocks[j] = -1;
+    }
+    write_inode_to_disk(ptr->id);
+    block_write(1, &ibmap);
+    block_write(2, &bbmap);
     
     return retstat;
 }
@@ -867,8 +841,8 @@ int sfs_opendir(const char *path, struct fuse_file_info *fi)
     {
         return -ENOENT;
     }
-	
-    return 0;
+	else
+		return 0;
 }
 
 /** Read directory
@@ -895,14 +869,13 @@ int sfs_opendir(const char *path, struct fuse_file_info *fi)
 int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
          struct fuse_file_info *fi)
 {
+	int i;
     filler(buf,".", NULL, 0);  
     filler(buf, "..", NULL, 0);
-    int i = 0;
-    for(;i<TOTAL_INODE_NUMBER;i++)
+    
+    for(i = 0;i<TOTAL_INODE_NUMBER;i++)
     {
-      if(((ibmap.bitmap[i / 8] >> (i % 8)) & 1) != 0)
-      {
-        if(check_parent_dir(path, i)!=-1 && strcmp(iTable.table[i].path, path)!=0)
+        if((((ibmap.bitmap[i / 8] >> (i % 8)) & 1) != 0) && check_parent_dir(path, i)!=-1 && strcmp(iTable.table[i].path, path)!=0)
         {
           char* name =get_file_name(i);
           struct stat *statbuf = malloc(sizeof(struct stat));
@@ -915,10 +888,10 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
           statbuf->st_size = tmp->size;
           statbuf->st_blocks = tmp->blocks;
           filler(buf,name,statbuf,0);
-          free(name);
+          
           free(statbuf);
+		  free(name);
         }
-      }
     }
 
     return 0;
