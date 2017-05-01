@@ -32,28 +32,12 @@
 
 /*  some helper functions */
 
-void set_nth_bit(unsigned char *bitmap, int idx)
-{   
-	bitmap[idx / 8] |= 1 << (idx % 8);
-}
-
-
-void clear_nth_bit(unsigned char *bitmap, int idx)
-{   
-    bitmap[idx / 8] &= ~(1 << (idx % 8));
-}
-
-int get_nth_bit(unsigned char *bitmap, int idx)
-{
-    return (bitmap[idx / 8] >> (idx % 8)) & 1;
-}
-
 int find_empty_inode_bit()
 {
   int i =0;
   for(;i<inodes_bm.size;i++)
   {
-    if(get_nth_bit(inodes_bm.bitmap, i) == 0)
+    if(((inodes_bm.bitmap[i / 8] >> (i % 8)) & 1) == 0)
     {
       return i;
     }
@@ -66,7 +50,7 @@ int find_empty_data_bit()
   int i =0;
   for(;i<block_bm.size;i++)
   {
-    if(get_nth_bit(block_bm.bitmap, i) == 0)
+    if(((block_bm.bitmap[i / 8] >> (i % 8)) & 1) == 0)
     {
       return i;
     }
@@ -82,11 +66,11 @@ void set_inode_bit(int index, int bit)
   }
   if(bit == 1)
   {
-	  set_nth_bit(inodes_bm.bitmap, index);
+	  inodes_bm.bitmap[index / 8] |= 1 << (index % 8);
   }
   else
   {
-	  clear_nth_bit(inodes_bm.bitmap, index);
+	  inodes_bm.bitmap[index / 8] &= ~(1 << (index % 8));
   }
 }
 
@@ -98,11 +82,11 @@ void set_block_bit(int index, int bit)
   }
   if(bit == 1)
   {
-	set_nth_bit(block_bm.bitmap, index);
+	block_bm.bitmap[index / 8] |= 1 << (index % 8);
   }
   else
   {
-	clear_nth_bit(block_bm.bitmap, index);
+	 block_bm.bitmap[index / 8] &= ~(1 << (index % 8));
   }
 }
 
@@ -117,23 +101,6 @@ int get_inode_from_path(const char* path)
       }
     }
     return -1;
-}
-
-void write_i_bitmap_to_disk()
-{
-  
-  if(block_write(1, &inodes_bm)>0)
-    log_msg("Updated inode bitmap is written to the diskfile\n");
-  else
-    log_msg("Failed to write the updated bitmap to diskfile\n");
-}
-
-void write_dt_bitmap_to_disk()
-{
-  if(block_write(2, &block_bm)>0)
-    log_msg("Updated block bitmap is written to the diskfile\n");
-  else
-    log_msg("Failed to write the updated bitmap to diskfile\n");
 }
 
 int write_inode_to_disk(int index)
@@ -243,9 +210,6 @@ char* get_file_name(int i)
   *(rtn+strlen(rtn)+1)='\0';
   return rtn;
 }
-
-
-
 
 
 /* 
@@ -360,14 +324,6 @@ void *sfs_init(struct fuse_conn_info *conn)
         }
         //write the block
 		block_write(i+3, buffer);
-        /*if(block_write(i+3, buffer) <= 0) 
-		{
-          log_msg("\nFailed to write block %d\n", i);
-        }
-		else
-		{
-          log_msg("\nSucceed to write block %d\n", i);
-        }*/
       }
       free(buffer);
     }else{
@@ -507,7 +463,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
       free(tmp);
        
     
-      write_i_bitmap_to_disk();
+      block_write(1, &inodes_bm);
       uint8_t *buf = malloc(BLOCK_SIZE*sizeof(uint8_t));
       if(block_read(3+((in->id)/2), buf)>-1)  //e.g. inode 0 and 1 should be in block 0+2
       {
@@ -553,8 +509,8 @@ int sfs_unlink(const char *path)
       }
 	  
       write_inode_to_disk(ptr->id);
-      write_i_bitmap_to_disk();
-      write_dt_bitmap_to_disk();
+      block_write(1, &inodes_bm);
+      block_write(2, &block_bm);
     }
 
     return retstat;
@@ -729,7 +685,7 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
 			{
               ptr->size = size;
               ptr->modified = time(NULL);
-              write_dt_bitmap_to_disk();
+              block_write(2, &block_bm);
               write_inode_to_disk(ptr->id);
               retstat = size;
               write_inode_to_disk(ptr->id);
@@ -887,7 +843,7 @@ int sfs_mkdir(const char *path, mode_t mode)
       set_inode_bit(tmp->id, 1);            
       write_inode_to_disk(tmp->id);
       free(tmp);
-      write_i_bitmap_to_disk();
+      block_write(1, &inodes_bm);
 
     }else{
       retstat = -EEXIST;
@@ -910,7 +866,7 @@ int sfs_rmdir(const char *path)
       int j;
       for(j=0;j<TOTAL_INODE_NUMBER;j++)
       {
-        if(get_nth_bit(inodes_bm.bitmap, j)!=0 &&j!=i)
+        if(((inodes_bm.bitmap[j / 8] >> (j % 8)) & 1) != 0 && j != i)
         {
           if(check_parent_dir(path, j)!=-1)
           {
@@ -920,7 +876,6 @@ int sfs_rmdir(const char *path)
         }
       }
       struct inode_ *ptr = &inodes_table.table[i];
-      log_msg("Deleting inode %d: \n", ptr->id);
       set_inode_bit(ptr->id, 0);
       memset(ptr->path, 0, 64);
       for(j = 0; j<15;j++)
@@ -930,8 +885,8 @@ int sfs_rmdir(const char *path)
       }
       log_msg("Inode %d delete complete!\n\n",ptr->id);
       write_inode_to_disk(ptr->id);
-      write_i_bitmap_to_disk();
-      write_dt_bitmap_to_disk();
+      block_write(1, &inodes_bm);
+      block_write(2, &block_bm);
     }else{
       return -ENOENT;
     }
@@ -993,7 +948,7 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
     int i = 0;
     for(;i<TOTAL_INODE_NUMBER;i++)
     {
-      if(get_nth_bit(inodes_bm.bitmap, i)!=0)
+      if(((inodes_bm.bitmap[i / 8] >> (i % 8)) & 1) != 0)
       {
         if(check_parent_dir(path, i)!=-1 && strcmp(inodes_table.table[i].path, path)!=0)
         {
