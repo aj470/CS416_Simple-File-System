@@ -32,33 +32,34 @@
 
 /*  some helper functions */
 
-int find_empty_inode_bit()
+int FindNextBit(int x)
 {
-  int i =0;
-  for(;i<inodes_bm.size;i++)
+  int i;
+  if(x == 1)
   {
-    if(((inodes_bm.bitmap[i / 8] >> (i % 8)) & 1) == 0)
-    {
-      return i;
-    }
+	  for(i = 0;i<inodes_bm.size;i++)
+	{
+	 
+			if(((inodes_bm.bitmap[i / 8] >> (i % 8)) & 1) == 0)
+		{
+		return i;
+		}
+	}
   }
+  else
+  {
+	for(i = 0;i<block_bm.size;i++)
+	{
+		if(((block_bm.bitmap[i / 8] >> (i % 8)) & 1) == 0)
+		{
+			return i;
+		}
+	}
+  }	  
   return -1;
 }
 
-int find_empty_data_bit()
-{
-  int i =0;
-  for(;i<block_bm.size;i++)
-  {
-    if(((block_bm.bitmap[i / 8] >> (i % 8)) & 1) == 0)
-    {
-      return i;
-    }
-  }
-  return -1;
-}
-
-void set_inode_bit(int index, int bit)
+void InitNextBit(int index, int bit, int f)
 {
   if(!(bit==0 || bit == 1))
   {
@@ -66,27 +67,26 @@ void set_inode_bit(int index, int bit)
   }
   if(bit == 1)
   {
-	  inodes_bm.bitmap[index / 8] |= 1 << (index % 8);
+	  if(f == 1)
+	  {
+		  inodes_bm.bitmap[index / 8] |= 1 << (index % 8);
+	  }
+	  if(f == 0)
+	  {
+		  block_bm.bitmap[index / 8] |= 1 << (index % 8);
+	  }
+		  
   }
   else
   {
-	  inodes_bm.bitmap[index / 8] &= ~(1 << (index % 8));
-  }
-}
-
-void set_block_bit(int index, int bit)
-{
-  if(!(bit==0 || bit == 1))
-  {
-	return;
-  }
-  if(bit == 1)
-  {
-	block_bm.bitmap[index / 8] |= 1 << (index % 8);
-  }
-  else
-  {
-	 block_bm.bitmap[index / 8] &= ~(1 << (index % 8));
+	  if(f == 1)
+	  {
+		  inodes_bm.bitmap[index / 8] &= ~(1 << (index % 8));
+	  }
+	  if(f == 0)
+	  {
+		  block_bm.bitmap[index / 8] &= ~(1 << (index % 8));
+	  }
   }
 }
 
@@ -123,19 +123,6 @@ int write_inode_to_disk(int index)
   }
   free(buf);
   return rtn;
-}
-
-int get_empty_fd()
-{
-  int i;
-  for(i = 0; i < TOTAL_INODE_NUMBER; i++)
-  {
-    if(fd.table[i].inode_id == -1)
-	{
-		return i;
-	}
-  }
-  return -1;
 }
 
 int find_fd(int index)
@@ -211,35 +198,6 @@ char* get_file_name(int i)
   return rtn;
 }
 
-
-/* 
- * A function initiate the inodes for the first setup of the file system
- */
-
-void init_data_structure()
-{
-  int i;
-  for(i = 0; i<TOTAL_INODE_NUMBER; i++)
-  {
-    inodes_table.table[i].id = i;
-    int j;
-    for(j = 0; j<15;j++)
-    {
-      inodes_table.table[i].data_blocks[j] = -1;
-    }
-    memset(inodes_table.table[i].path, 0, 64*sizeof(char)) ;
-    inodes_table.table[i].data_blocks_level =0;
-  }
-
-  
-  memset(inodes_bm.bitmap,0,TOTAL_INODE_NUMBER/8);
-  memset(block_bm.bitmap, 0, TOTAL_DATA_BLOCKS/8);
-
-  inodes_bm.size = TOTAL_INODE_NUMBER;
-  block_bm.size = TOTAL_DATA_BLOCKS;
-  
-}
-
 // Prototypes for all these functions, and the C-style comments,
 // come indirectly from /usr/include/fuse.h
 //
@@ -288,9 +246,29 @@ void *sfs_init(struct fuse_conn_info *conn)
       supablock.fs_type = 0;
       supablock.data_blocks = TOTAL_DATA_BLOCKS;
       supablock.i_list = 1;
+	  
+	  
+	int k;
+	for(k = 0; k<TOTAL_INODE_NUMBER; k++)
+	{
+		inodes_table.table[k].id = k;
+		int j;
+		for(j = 0; j<15;j++)
+		{
+			inodes_table.table[k].data_blocks[j] = -1;
+		}
+		memset(inodes_table.table[k].path, 0, 64*sizeof(char)) ;
+		inodes_table.table[k].data_blocks_level =0;
+	}
 
-      init_data_structure();
+  
+  memset(inodes_bm.bitmap,0,TOTAL_INODE_NUMBER/8);
+  memset(block_bm.bitmap, 0, TOTAL_DATA_BLOCKS/8);
 
+  inodes_bm.size = TOTAL_INODE_NUMBER;
+  block_bm.size = TOTAL_DATA_BLOCKS;
+ 
+ 
       //init the root i-node here
       inode *root = &inodes_table.table[0];
       memcpy(&root->path,"/",1);
@@ -303,7 +281,7 @@ void *sfs_init(struct fuse_conn_info *conn)
       root->gid = getgid();
       root->type = 0;  // directory
 
-      set_inode_bit(0,1); // set the bit map for root
+      InitNextBit(0,1,1); // set the bit map for root
 
       block_write(0, &supablock) > 0;
 
@@ -444,7 +422,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if(i == -1)
     {
       struct inode_ *tmp = malloc(sizeof(struct inode_));
-      tmp->id = find_empty_inode_bit();
+      tmp->id = FindNextBit(1);
       tmp->size = 0;
       tmp->uid = getuid();
       tmp->gid = getgid();
@@ -459,7 +437,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
       memcpy(&inodes_table.table[tmp->id], tmp, sizeof(struct inode_));
       struct inode_ *in = &inodes_table.table[tmp->id];
-      set_inode_bit(tmp->id, 1);
+      InitNextBit(tmp->id, 1,1);
       free(tmp);
        
     
@@ -498,13 +476,13 @@ int sfs_unlink(const char *path)
     if(i!=-1)
     {
       struct inode_ *ptr = &inodes_table.table[i];
-      set_inode_bit(ptr->id, 0);
+      InitNextBit(ptr->id, 0,1);
       memset(ptr->path, 0, 64);
 	  
       int j;
       for(j = 0; j<15;j++)
       {
-        set_block_bit(ptr->data_blocks[j],0);
+        InitNextBit(ptr->data_blocks[j],0,0);
         ptr->data_blocks[j] = -1;
       }
 	  
@@ -535,7 +513,7 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
     int i = get_inode_from_path(path);
     if(i != -1)
     {
-      retstat = get_empty_fd();
+      retstat = find_fd(-1);
       if(retstat != -1)
 	  {
 		  take_fd(retstat,i);
@@ -677,8 +655,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
        
 	   if(ptr->size == 0)
 	   {
-          ptr->data_blocks[0] = find_empty_data_bit();
-          set_block_bit(ptr->data_blocks[0],1);
+          ptr->data_blocks[0] = FindNextBit(0);
+          InitNextBit(ptr->data_blocks[0],1,0);
           if(size <= BLOCK_SIZE)
           {
             if(block_write(3+TOTAL_INODE_NUMBER+ptr->data_blocks[0], buf) >= size)
@@ -706,8 +684,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
             int block;
             for(block = 1; block < needed; block++)
             {
-              ptr->data_blocks[block] = find_empty_data_bit();
-              set_block_bit(ptr->data_blocks[block],1);
+              ptr->data_blocks[block] = FindNextBit(0);
+              InitNextBit(ptr->data_blocks[block],1,0);
               
               if(block_write(ptr->data_blocks[block]+TOTAL_INODE_NUMBER+3, buf+offset) > 0)
 			  {
@@ -775,8 +753,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
               int b;
               for(b = blocks; b<blocks+needed; b++)
               {
-                ptr->data_blocks[b] = find_empty_data_bit();
-                set_block_bit(ptr->data_blocks[b],1);
+                ptr->data_blocks[b] = FindNextBit(0);
+                InitNextBit(ptr->data_blocks[b],1,0);
                 if(block_write(ptr->data_blocks[b]+TOTAL_INODE_NUMBER+3, buf+offset) > 0)
 				{
                   offset += BLOCK_SIZE;
@@ -829,7 +807,7 @@ int sfs_mkdir(const char *path, mode_t mode)
     if(i == -1)
 	{  
       struct inode_ *tmp = malloc(sizeof(struct inode_));
-      tmp->id = find_empty_inode_bit();
+      tmp->id = FindNextBit(1);
       tmp->size = 0;
       tmp->uid = getuid();
       tmp->gid = getgid();
@@ -840,7 +818,7 @@ int sfs_mkdir(const char *path, mode_t mode)
       memcpy(tmp->path, path,64);
       tmp->created = time(NULL);
       memcpy(&inodes_table.table[tmp->id], tmp, sizeof(struct inode_));
-      set_inode_bit(tmp->id, 1);            
+      InitNextBit(tmp->id, 1,1);            
       write_inode_to_disk(tmp->id);
       free(tmp);
       block_write(1, &inodes_bm);
@@ -876,11 +854,11 @@ int sfs_rmdir(const char *path)
         }
       }
       struct inode_ *ptr = &inodes_table.table[i];
-      set_inode_bit(ptr->id, 0);
+      InitNextBit(ptr->id, 0,1);
       memset(ptr->path, 0, 64);
       for(j = 0; j<15;j++)
       {
-        set_block_bit(ptr->data_blocks[j],0);
+        InitNextBit(ptr->data_blocks[j],0,0);
         ptr->data_blocks[j] = -1;
       }
       log_msg("Inode %d delete complete!\n\n",ptr->id);
